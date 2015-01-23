@@ -16,7 +16,15 @@ use Zend\Code\Generator\DocBlock\Tag\PropertyTag;
 
 class ClassGenerator
 {
+    protected $constructArrayObjects = array();
 
+    /**
+     * Generateds the class body.
+     *
+     * @param Generator\ClassGenerator $class
+     * @param PHPClass $type
+     * @return bool
+     */
     private function handleBody(Generator\ClassGenerator $class, PHPClass $type)
     {
         foreach ($type->getProperties() as $prop) {
@@ -28,6 +36,21 @@ class ClassGenerator
             if ($prop->getName() !== '__value') {
                 $this->handleMethod($class, $prop, $type);
             }
+        }
+
+        if (! empty($this->constructArrayObjects)) {
+            $method = new MethodGenerator("__construct", []);
+            $body = '';
+            foreach ($this->constructArrayObjects as $property) {
+                /** @var \Goetas\Xsd\XsdToPhp\Php\Structure\PHPProperty $property */
+                $body .= "\$this->". $property->getName() ." = new \\ArrayObject();";
+            }
+            $method->setBody($body);
+            $class->addMethodFromGenerator($method);
+
+            // reset the constructArrayObjects to make it stateless
+            // for next class generation iteration.
+            $this->constructArrayObjects = array();
         }
 
         if (count($type->getProperties()) === 1 && $type->hasProperty('__value')) {
@@ -152,6 +175,8 @@ class ClassGenerator
 
         $parameter = new ParameterGenerator($prop->getName(), "mixed");
 
+        $useArrayObject = false;
+
         if ($type && $type instanceof PHPClassOf) {
             $patramTag->setTypes($this->getPhpType($type->getArg()
                 ->getType()) . "[]");
@@ -162,6 +187,8 @@ class ClassGenerator
                 if (($t = $p->getType())) {
                     $patramTag->setTypes($this->getPhpType($t));
                 }
+            } else {
+                $useArrayObject = true;
             }
         } elseif ($type) {
             if ($this->isNativeType($type)) {
@@ -182,7 +209,12 @@ class ClassGenerator
             }
         }
 
-        $methodBody .= "\$this->" . $prop->getName() . " = \$" . $prop->getName() . ";" . PHP_EOL;
+        if ($useArrayObject) {
+            $methodBody .= "\$this->" . $prop->getName() . " = new \\ArrayObject(\$" . $prop->getName() . ");" . PHP_EOL;
+        } else {
+            $methodBody .= "\$this->" . $prop->getName() . " = \$" . $prop->getName() . ";" . PHP_EOL;
+        }
+
         $methodBody .= "return \$this;";
         $method->setBody($methodBody);
         $method->setDocBlock($docblock);
@@ -193,7 +225,6 @@ class ClassGenerator
 
     private function handleGetter(Generator\ClassGenerator $generator, PHPProperty $prop, PHPClass $class)
     {
-
         if ($prop->getType() instanceof PHPClassOf){
             $docblock = new DocBlockGenerator();
             $docblock->setShortDescription("isset " . $prop->getName());
@@ -210,7 +241,7 @@ class ClassGenerator
 
             $method = new MethodGenerator("isset" . Inflector::classify($prop->getName()), [$paramIndex]);
             $method->setDocBlock($docblock);
-            $method->setBody("return isset(\$this->" . $prop->getName() . "[\$index]);");
+            $method->setBody("return \$this->" . $prop->getName() . "->offsetExists(\$index);");
             $generator->addMethodFromGenerator($method);
 
             $docblock = new DocBlockGenerator();
@@ -229,10 +260,9 @@ class ClassGenerator
 
             $method = new MethodGenerator("unset" . Inflector::classify($prop->getName()), [$paramIndex]);
             $method->setDocBlock($docblock);
-            $method->setBody("unset(\$this->" . $prop->getName() . "[\$index]);");
+            $method->setBody("\$this->" . $prop->getName() . "->offsetUnset(\$index);");
             $generator->addMethodFromGenerator($method);
         }
-        // ////
 
         $docblock = new DocBlockGenerator();
 
@@ -328,7 +358,8 @@ class ClassGenerator
             }
         }
 
-        $methodBody = "\$this->" . $prop->getName() . "[] = \$" . $propName . ";" . PHP_EOL;
+        $methodBody = "\$$propName = new \SoapVar(\$$propName, SOAP_ENC_OBJECT, null, null, '$propName');"  . PHP_EOL;
+        $methodBody .= "\$this->" . $prop->getName() . "->append(\$" . $propName . "); " . PHP_EOL;
         $methodBody .= "return \$this;";
         $method->setBody($methodBody);
         $method->setDocBlock($docblock);
@@ -341,6 +372,9 @@ class ClassGenerator
     {
         if ($prop->getType() instanceof PHPClassOf) {
             $this->handleAdder($generator, $prop, $class);
+
+            // initialize an ArrayObject for $prop in the constructor
+            $this->constructArrayObjects[] = $prop;
         }
 
         $this->handleGetter($generator, $prop, $class);
@@ -389,6 +423,13 @@ class ClassGenerator
         $docBlock->setTag($tag);
     }
 
+    /**
+     * This is the entry point when processing the code generation.
+     *
+     * @param Generator\ClassGenerator $class
+     * @param PHPClass $type
+     * @return bool
+     */
     public function generate(Generator\ClassGenerator $class, PHPClass $type)
     {
         $docblock = new DocBlockGenerator("Class representing " . $type->getName());

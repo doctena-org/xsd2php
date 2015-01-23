@@ -26,4 +26,10 @@ class PHPProperty extends PHPArg
         $this->visibility = $visibility;
         return $this;
     }
+
+    public function setName($name)
+    {
+        $this->name = ucfirst($name);
+        return $this;
+    }
 }
